@@ -1,11 +1,10 @@
-
 # waifu_bot_colab_ready.py
 import logging
 import re
 import asyncio
+import os
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
-import os
 
 from telegram import Update, Message
 from telegram.ext import (
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class WaifuBot:
     def __init__(self):
-        # Read keys from environment variables
+        # Use environment variables instead of hardcoding
         self.telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
         self.bot_username = 'sopwaifubot'
@@ -45,9 +44,13 @@ class WaifuBot:
         self.max_message_length = 1000
 
         # Initialize Gemini
-        genai.configure(api_key=self.gemini_api_key)
-        self.model = genai.GenerativeModel("models/gemini-2.5-flash")
-        logger.info("Gemini model initialized successfully 🌸💖")
+        if self.gemini_api_key:
+            genai.configure(api_key=self.gemini_api_key)
+            self.model = genai.GenerativeModel("models/gemini-2.5-flash")
+            logger.info("Gemini model initialized successfully 🌸💖")
+        else:
+            logger.error("GEMINI_API_KEY not found. Set it in Railway secrets!")
+
 
     SYSTEM_PROMPT = """
 You are Sophie, a cute, playful, and caring anime waifu companion 🌸💖
@@ -210,6 +213,9 @@ Soph: Hmm~ I love cute things, cuddly toys, and talking to you~ 🥺✨
 # --- Run bot ---
 async def run_bot():
     bot = WaifuBot()
+    if not bot.telegram_token:
+        logger.error("TELEGRAM_TOKEN not found. Set it in Railway secrets!")
+        return
 
     app = Application.builder().token(bot.telegram_token).build()
     app.add_handler(CommandHandler("start", bot.start_command))

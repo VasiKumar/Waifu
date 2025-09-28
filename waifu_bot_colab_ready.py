@@ -35,7 +35,7 @@ class WaifuBot:
         # Use environment variables instead of hardcoding
         self.telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
-        self.bot_username = 'sopwaifubot' # Replace with your bot's username if needed
+        self.bot_username = 'Sopwaifubot' # Replace with your bot's username if needed
 
         self.user_conversations: Dict[int, List[str]] = {}
         self.rate_limits: Dict[int, List[datetime]] = {}

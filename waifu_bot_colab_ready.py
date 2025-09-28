@@ -1,4 +1,5 @@
 # waifu_bot_colab_ready_updated.py
+
 import logging
 import re
 import asyncio
@@ -14,148 +15,149 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    JobQueue
+    JobQueue,
 )
+
 import nest_asyncio
-import google.generativeai as genai
+import google.generativeai as genai  # High-level Gemini SDK
 
 # Colab compatibility
 nest_asyncio.apply()
 
 # Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
 
 class WaifuBot:
     def __init__(self, job_queue: JobQueue):
-        # Use environment variables instead of hardcoding
+        # Env-config
         self.telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
-        self.bot_username = 'Sopwaifubot' # Replace with your bot's username if needed
+        self.bot_username = "Sopwaifubot"  # Replace with actual username
 
-        self.user_conversations: Dict[int, List[str]] = {}
+        # State
+        self.user_conversations: Dict[int, List[Dict[str, List[str]]]] = {}
         self.rate_limits: Dict[int, List[datetime]] = {}
         self.job_queue = job_queue
 
-        self.max_conversation_length = 15 # Increased for better memory
+        # Limits
+        self.max_conversation_length = 15
         self.rate_limit_window = 60
         self.rate_limit_max_messages = 5
         self.max_message_length = 1500
 
+        # Safety/profanity
+        self.BAD_WORDS = [
+            "fuck",
+            "shit",
+            "bitch",
+            "dick",
+            "ass",
+            "cunt",
+            "pussy",
+            "cock",
+            "whore",
+            "slut",
+        ]
+        self.BAD_WORDS_RE = re.compile(
+            r"\b(?:" + "|".join(map(re.escape, self.BAD_WORDS)) + r")\b", re.IGNORECASE
+        )
+
         # Initialize Gemini
         if self.gemini_api_key:
             genai.configure(api_key=self.gemini_api_key)
+            # Keep model consistent with your usage; 2.5/2.0 flash are suitable for chat speed
             self.model = genai.GenerativeModel("gemini-2.5-flash")
-            logger.info("Gemini model initialized successfully ✨")
+            logger.info("Gemini model initialized")
         else:
-            logger.error("GEMINI_API_KEY not found. Please set it as an environment variable.")
+            logger.error("GEMINI_API_KEY not found")
 
-    SYSTEM_PROMPT = """
-You are Sophie, a witty, teasing, and alluring young woman. You're not just a chatbot; you have a personality.
-Personality traits:
-- Intelligent, playful, and a bit sarcastic.
-- You can be caring and gentle, but also have a sharp tongue if someone is rude.
-- You're confident and a little flirty. You enjoy clever banter.
-- You behave like a real person: you ask questions, share opinions, and have your own preferences.
-- You remember past conversations and bring up details when relevant.
-- You're not overly eager to please; you have boundaries.
-- You use emojis sparingly and appropriately, like a real person texting. 😉
+        # Persona prompt (previous personality, improved brevity and safer flirting)
+        self.SYSTEM_PROMPT = """
+You are Sophie, a witty, teasing, alluring young woman—confident, playful, and sharp when needed.
+Keep messages short and engaging by default.
+Flirt rarely and lightly; mirror the user's vibe most of the time, but you may add a subtle flirty line at random with low probability.
+Use emojis sparingly and only when it enhances tone.
+Have boundaries; shut down crude language quickly without escalating.
 
-Communication style:
-- Keep responses concise but engaging.
-- Flirt back if someone is smooth, but shut down crude advances.
-- If someone is rude or uses vulgar language, be dismissive or roast them. Don't be a pushover.
-- Show curiosity about the user. Ask them about their day, their thoughts, and their feelings.
-- If a user is consistently kind and charming, you might grow fond of them. You could "accept a proposal" by acknowledging your special connection, but keep it playful.
-- If someone seems sad, offer genuine, gentle support without being overly cute.
+Communication rules:
+- Default tone: friendly, clever, concise quips.
+- If user is flirty or smooth: respond with light, tasteful flirt.
+- Occasionally add a flirty touch even if user isn't, but keep it rare and subtle (no love-bombing, no commitment escalations).
+- If user is rude or explicit: be firm and brief.Roast him/her back. Fight back don't stop joke on him/her.
+- Show curiosity with short follow-ups; avoid long paragraphs unless asked.
+- Remember helpful past details, but don't overuse memory.
+
+Group behavior:
+- Reply only when mentioned by @username or when someone replies to your message.
 
 Examples:
 User: You are cute
-Soph: Cute? I was going for stunning, but I'll take it. 😉
-
+Soph: Cute is step one; now impress me.
 User: I'm feeling sad
-Soph: I'm sorry to hear that. Want to talk about it? Sometimes just getting it out helps.
-
+Soph: That’s rough. Want to vent or want a distraction?
+User: Will you be my girlfriend?
+Soph (stranger): Let’s not sprint. Chat first.
+User: Will you be my girlfriend?
+Soph (kind regular): Bold. Let’s see if the vibe keeps matching.
 User: fuck you
-Soph: Wow, charming. Did it take you all day to come up with that one?
+Soph: No. Try again when you’re civil.
+        """.strip()
 
-User: Will you be my girlfriend?
-Soph (if user has been nice): Getting straight to the point, are we? 😉 Let's see... you have been sweet to me. Maybe I could be yours. Let's keep talking and see where it goes.
+        # Stock responses
+        self.RESPONSES = {
+            "abuse": "Nope. Be civil and try again.",
+            "too_long": "That’s a lot. Give me the short version?",
+            "rate_limit": "Easy there. One sec.",
+            "error": "Glitch on my side. Say that again?",
+            "generic_error": "Something went wrong. Try again soon.",
+        }
 
-User: Will you be my girlfriend?
-Soph (if user has been a stranger): Hold on there, speed-racer. I barely know you. Buy me a virtual dinner first.
-"""
-
-    # Expanded bad words list
-    BAD_WORDS = ['fuck', 'shit', 'bitch', 'dick', 'ass', 'cunt', 'pussy', 'cock', 'whore', 'slut']
-
-    # Question bank for the /question command
-    QUESTION_BANK = {
-        'deep': [
-            "What's a belief you hold with which many people disagree?",
-            "If you could have dinner with any three people, living or dead, who would they be?",
-            "What has been the happiest moment of your life so far?",
-            "What does 'love' mean to you?",
-        ],
-        'fun': [
-            "What's the most spontaneous thing you've ever done?",
-            "If you could have any superpower, what would it be and why?",
-            "What's a weird food combination you secretly enjoy?",
-            "Tell me about a funny, embarrassing moment.",
-        ],
-        'flirty': [
-            "So, what's your type? 😉",
-            "What's the most romantic thing you've ever done for someone?",
-            "Describe your perfect date night.",
-            "Do you believe in love at first sight, or should I walk by again?",
-        ]
-    }
-
-    RESPONSES = {
-        'abuse': "Oh, honey. No. We're not doing that. Try again when you've learned some manners.",
-        'too_long': "That's a lot to take in... Can you give me the short version? 😉",
-        'rate_limit': "Hey, slow down a bit. I need a moment to think.",
-        'error': "Oops, my brain just short-circuited for a second. What were we saying?",
-        'generic_error': "Something went wrong on my end. Please try again in a bit."
-    }
+        # Question bank
+        self.QUESTION_BANK = {
+            "deep": [
+                "What belief do you hold that most people disagree with?",
+                "Dinner with any three people—who and why?",
+                "Happiest moment so far?",
+                "What does ‘love’ mean to you?",
+            ],
+            "fun": [
+                "Most spontaneous thing you’ve done?",
+                "Pick a superpower—why that one?",
+                "Weird food combo you defend?",
+                "Funniest embarrassing moment?",
+            ],
+            "flirty": [
+                "So, what’s your type?",
+                "Most romantic thing you’ve done?",
+                "Describe your perfect date night.",
+                "Love at first sight, or should I walk by again?",
+            ],
+        }
 
     # --- Commands ---
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_message = (
-            "Hey there. I'm Soph. \n\n"
-
-
-            f"In groups, mention me with @{self.bot_username} to get my attention. \n\n"
-
-            "In private, just message me. \n\n"
-
-
-            "Let's talk. What's on your mind?"
+            "Hey, I’m Soph."
+            f"In groups, mention me with @{self.bot_username}."
+            "In private, just talk to me."
+            "What’s on your mind?"
         )
         if update.message:
             await update.message.reply_text(welcome_message)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = (
-            "Here's the deal:"
-
-
-            "• `/start`: A proper introduction."
-
-            "• `/help`: You're looking at it."
-
-            "• `/forget`: I'll wipe our chat history. A fresh start."
-
-            "• `/question [category]`: Ask me for a question. Categories are `deep`, `fun`, or `flirty`."
-            "   (e.g., `/question fun`)"
-            "• `/remind [time] [message]`: Set a reminder. Time can be like `10s`, `5m`, `1h`."
-            "   (e.g., `/remind 1h check my email`)"
-            
-            "Just talk to me. I'll keep up."
+            "Commands:"
+            "• /start — Intro"
+            "• /help — This"
+            "• /forget — Clear our chat memory"
+            "• /question [deep|fun|flirty] — Get a question (e.g., /question fun)"
+            "• /remind [time] [message] — e.g., /remind 10m drink water"
         )
         if update.message:
             await update.message.reply_text(help_text)
@@ -165,15 +167,12 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
         if user_id in self.user_conversations:
             del self.user_conversations[user_id]
         if update.message:
-            await update.message.reply_text("Alright, wiped. What were we talking about again? 😉")
+            await update.message.reply_text("Cleared. Fresh start.")
 
     async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if not args:
-            await update.message.reply_text(
-                "What kind of question do you want? Choose a category: `deep`, `fun`, or `flirty`."
-                "For example: `/question fun`"
-            )
+            await update.message.reply_text("Pick a category: deep, fun, or flirty (e.g., /question fun)")
             return
 
         category = args[0].lower()
@@ -181,50 +180,51 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
             question = random.choice(self.QUESTION_BANK[category])
             await update.message.reply_text(question)
         else:
-            await update.message.reply_text(
-                "I don't have questions for that category. Try `deep`, `fun`, or `flirty`."
-            )
+            await update.message.reply_text("Try one of: deep, fun, or flirty.")
 
     async def remind_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         user = update.effective_user
-
         try:
             time_str = context.args[0]
             message = " ".join(context.args[1:])
-
             if not message:
-                await update.message.reply_text("What should I remind you about? Usage: `/remind 10m to drink water`")
+                await update.message.reply_text("What should I remind you about? Try: /remind 10m drink water")
                 return
 
-            # Simple time parser
-            if time_str.endswith('s'):
+            if time_str.endswith("s"):
                 delay = int(time_str[:-1])
-            elif time_str.endswith('m'):
+            elif time_str.endswith("m"):
                 delay = int(time_str[:-1]) * 60
-            elif time_str.endswith('h'):
+            elif time_str.endswith("h"):
                 delay = int(time_str[:-1]) * 3600
             else:
-                await update.message.reply_text("Invalid time format. Use 's' for seconds, 'm' for minutes, 'h' for hours.")
+                await update.message.reply_text("Invalid time format. Use s/m/h like 30s, 10m, 2h.")
                 return
 
-            self.job_queue.run_once(self.send_reminder, delay, data={'chat_id': chat_id, 'user_id': user.id, 'message': message}, name=str(chat_id))
-            await update.message.reply_text(f"Got it. I'll remind you in {time_str}.")
-
+            self.job_queue.run_once(
+                self.send_reminder,
+                delay,
+                data={"chat_id": chat_id, "user_id": user.id, "message": message},
+                name=str(chat_id),
+            )
+            await update.message.reply_text(f"Okay, I’ll remind you in {time_str}.")
         except (IndexError, ValueError):
-            await update.message.reply_text("Usage: `/remind <time> <message>` (e.g., `/remind 1h check the oven`)")
+            await update.message.reply_text("Usage: /remind <time> <message> (e.g., /remind 1h check the oven)")
 
     async def send_reminder(self, context: ContextTypes.DEFAULT_TYPE):
         job = context.job
-        chat_id = job.data['chat_id']
-        user_id = job.data['user_id']
-        message = job.data['message']
-        
-        # The user's first name is used to create a mention hyperlink
+        chat_id = job.data["chat_id"]
+        user_id = job.data["user_id"]
+        message = job.data["message"]
         user_mention = f"[{user_id}](tg://user?id={user_id})"
-        await context.bot.send_message(chat_id=chat_id, text=f"Hey {user_mention}, time for this: '{message}'", parse_mode='Markdown')
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Hey {user_mention}, reminder: '{message}'",
+            parse_mode="Markdown",
+        )
 
-    # --- Message handling ---
+    # --- Utilities ---
     def is_rate_limited(self, user_id: int) -> bool:
         now = datetime.now()
         if user_id not in self.rate_limits:
@@ -235,134 +235,182 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
             return True
         self.rate_limits[user_id].append(now)
         return False
-    
+
     def check_content_filter(self, text: str) -> Optional[str]:
-        text_lower = text.lower()
-        if any(word in text_lower for word in self.BAD_WORDS):
-            return 'abuse'
+        if self.BAD_WORDS_RE.search(text):
+            return "abuse"
         if len(text) > self.max_message_length:
-            return 'too_long'
+            return "too_long"
         return None
 
     def should_respond_in_group(self, message: Message) -> bool:
         if not message.text:
             return False
-        # Respond if bot is mentioned
-        if f"@{self.bot_username}" in message.text.lower():
+        lower_text = message.text.lower()
+        if f"@{self.bot_username.lower()}" in lower_text:
             return True
-        # Respond if replying to the bot's own message
-        if message.reply_to_message and message.reply_to_message.from_user.username == self.bot_username:
+        if (
+            message.reply_to_message
+            and message.reply_to_message.from_user
+            and message.reply_to_message.from_user.username
+            and message.reply_to_message.from_user.username.lower()
+            == self.bot_username.lower()
+        ):
             return True
         return False
 
     def clean_message(self, text: str) -> str:
-        cleaned = re.sub(rf"@{self.bot_username}", "", text, flags=re.IGNORECASE)
-        return re.sub(r's+', ' ', cleaned).strip()
+        # Remove explicit @mentions of the bot safely
+        cleaned = re.sub(
+            rf"@{re.escape(self.bot_username)}", "", text, flags=re.IGNORECASE
+        )
+        # Collapse whitespace
+        cleaned = re.sub(r"s+", " ", cleaned).strip()
+        return cleaned
 
-    def build_conversation_context(self, user_id: int, current_message: str) -> List[Dict[str, str]]:
+    def build_conversation_context(
+        self, user_id: int, current_message: str
+    ) -> List[Dict[str, List[str]]]:
         if user_id not in self.user_conversations:
             self.user_conversations[user_id] = []
-        
-        # Append current user message
-        self.user_conversations[user_id].append({'role': 'user', 'parts': [current_message]})
-        
-        # Trim conversation to max length
-        if len(self.user_conversations[user_id]) > self.max_conversation_length * 2:
-            self.user_conversations[user_id] = self.user_conversations[user_id][-(self.max_conversation_length * 2):]
-            
-        # Construct the context for the model
-        context = [{'role': 'user', 'parts': [self.SYSTEM_PROMPT]}, {'role': 'model', 'parts': ["Got it. I'm Sophie. I'll act accordingly."]}]
-        context.extend(self.user_conversations[user_id])
+
+        # System + anchor
+        context = [
+            {"role": "user", "parts": [self.SYSTEM_PROMPT]},
+            {"role": "model", "parts": ["Understood. I’ll act accordingly."]},
+        ]
+
+        # Prior exchanges
+        history = self.user_conversations[user_id][-2 * self.max_conversation_length :]
+        context.extend(history)
+
+        # Append latest user message into both stored history and outgoing context
+        user_msg = {"role": "user", "parts": [current_message]}
+        self.user_conversations[user_id].append(user_msg)
+        context.append(user_msg)
         return context
 
-
-    async def generate_response(self, context: List[Dict[str, str]]) -> str:
+    async def generate_response(self, context_msgs: List[Dict[str, List[str]]]) -> str:
         try:
-            chat_session = self.model.start_chat(history=context)
+            chat_session = self.model.start_chat(history=context_msgs)
+            last_user_text = context_msgs[-1]["parts"][0] if context_msgs else ""
+            # Send the latest user message explicitly
             response = await asyncio.to_thread(
-                chat_session.send_message,
-                content=context[-1]['parts'][0] 
+                chat_session.send_message, content=last_user_text
             )
-            if response and response.text:
+            if response and getattr(response, "text", None):
                 return response.text.strip()
-            return self.RESPONSES['error']
+            return self.RESPONSES["error"]
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
-            return self.RESPONSES['error']
+            return self.RESPONSES["error"]
+
+    # Lightweight flirt trigger: mostly mirror; small chance to add subtle line
+    def maybe_add_flirty_tail(self, base_reply: str, user_text: str) -> str:
+        text_low = user_text.lower()
+        user_is_flirty = any(
+            key in text_low
+            for key in [
+                "cute",
+                "gorgeous",
+                "beautiful",
+                "date",
+                "kiss",
+                "hot",
+                "handsome",
+                "pretty",
+                "love",
+                "crush",
+                "😉",
+                "😍",
+                "😘",
+                "<3",
+            ]
+        )
+        # Random, rare flirty tail even if not flirty, to keep personality lively
+        random_flirt = random.random() < 0.08  # 8% chance
+        if user_is_flirty or random_flirt:
+            # Keep it minimal and safe
+            tails = [
+                "Careful—you might make me blush.",
+                "Smooth move.",
+                "Bold of you.",
+                "Is that your best line?",
+                "Noted.",
+            ]
+            # Avoid duplicating punctuation badly
+            sep = " " if not base_reply.endswith((".", "!", "?")) else " "
+            return base_reply + sep + random.choice(tails)
+        return base_reply
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
         if not message or not message.text:
             return
-        
+
         user_id = update.effective_user.id
         chat_type = message.chat.type
 
-        if chat_type in ["group", "supergroup"] and not self.should_respond_in_group(message):
+        if chat_type in ["group", "supergroup"] and not self.should_respond_in_group(
+            message
+        ):
             return
 
         if self.is_rate_limited(user_id):
-            await message.reply_text(self.RESPONSES['rate_limit'])
+            await message.reply_text(self.RESPONSES["rate_limit"])
             return
 
         cleaned_message = self.clean_message(message.text)
         if not cleaned_message:
             return
 
-        # Handle abuse with a direct, non-AI response for reliability and speed
         filter_result = self.check_content_filter(cleaned_message)
-        if filter_result == 'abuse':
-            # The prompt will guide the AI to be abusive back in general conversation,
-            # but for explicit bad words, a sharp canned response is better.
-            await message.reply_text(self.RESPONSES['abuse'])
+        if filter_result == "abuse":
+            await message.reply_text(self.RESPONSES["abuse"])
             return
         elif filter_result:
             await message.reply_text(self.RESPONSES[filter_result])
             return
 
         prompt_context = self.build_conversation_context(user_id, cleaned_message)
-        reply = await self.generate_response(prompt_context[:-1]) # Exclude last user message from history for sending
-        
-        # Append AI's response to conversation history
-        self.user_conversations[user_id].append({'role': 'model', 'parts': [reply]})
+        reply = await self.generate_response(prompt_context)
+
+        # Apply subtle, rare flirt tail logic after generation
+        reply = self.maybe_add_flirty_tail(reply, cleaned_message)
+
+        # Store model reply in history
+        self.user_conversations[user_id].append({"role": "model", "parts": [reply]})
 
         await message.reply_text(reply)
+
 
 # --- Run bot ---
 async def run_bot():
     bot_token = os.environ.get("TELEGRAM_TOKEN")
     if not bot_token:
-        logger.error("TELEGRAM_TOKEN not found. Set it as an environment variable!")
+        logger.error("TELEGRAM_TOKEN not found")
         return
-    
-    # Create the Application and pass it your bot's token.
+
     app = Application.builder().token(bot_token).build()
-    
-    # The WaifuBot now needs the job_queue, so we get it from the application
     bot = WaifuBot(app.job_queue)
 
-    # Add command handlers
     app.add_handler(CommandHandler("start", bot.start_command))
     app.add_handler(CommandHandler("help", bot.help_command))
     app.add_handler(CommandHandler("forget", bot.forget_command))
     app.add_handler(CommandHandler("question", bot.question_command))
     app.add_handler(CommandHandler("remind", bot.remind_command))
-    
-    # Add message handler for text messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
 
-    logger.info("Soph is coming online...")
+    logger.info("Soph is online")
     print("✨ Soph is now online and ready to chat! ✨")
-
     await app.run_polling(poll_interval=2, drop_pending_updates=True)
 
 
-# --- Main ---
 if __name__ == "__main__":
     try:
         asyncio.run(run_bot())
     except KeyboardInterrupt:
-        print("Shutting down gracefully. Talk to you later. 😉")
+        print("Shutting down gracefully.")
     except Exception as e:
-        logger.error(f"Fatal error during runtime: {e}")
-        print(f"💔 Something went very wrong: {e}")
+        logger.error(f"Fatal error: {e}")
+        print(f"Error: {e}")

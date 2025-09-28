@@ -128,12 +128,12 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
         welcome_message = (
             "Hey there. I'm Soph. \n\n"
 
-"
+
             f"In groups, mention me with @{self.bot_username} to get my attention. \n\n"
-"
+
             "In private, just message me. \n\n"
 
-"
+
             "Let's talk. What's on your mind?"
         )
         if update.message:
@@ -141,24 +141,20 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = (
-            "Here's the deal:
+            "Here's the deal:"
 
-"
-            "• `/start`: A proper introduction.
-"
-            "• `/help`: You're looking at it.
-"
-            "• `/forget`: I'll wipe our chat history. A fresh start.
-"
-            "• `/question [category]`: Ask me for a question. Categories are `deep`, `fun`, or `flirty`.
-"
-            "   (e.g., `/question fun`)
-"
-            "• `/remind [time] [message]`: Set a reminder. Time can be like `10s`, `5m`, `1h`.
-"
-            "   (e.g., `/remind 1h check my email`)
 
-"
+            "• `/start`: A proper introduction."
+
+            "• `/help`: You're looking at it."
+
+            "• `/forget`: I'll wipe our chat history. A fresh start."
+
+            "• `/question [category]`: Ask me for a question. Categories are `deep`, `fun`, or `flirty`."
+            "   (e.g., `/question fun`)"
+            "• `/remind [time] [message]`: Set a reminder. Time can be like `10s`, `5m`, `1h`."
+            "   (e.g., `/remind 1h check my email`)"
+            
             "Just talk to me. I'll keep up."
         )
         if update.message:
@@ -175,8 +171,7 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
         args = context.args
         if not args:
             await update.message.reply_text(
-                "What kind of question do you want? Choose a category: `deep`, `fun`, or `flirty`.
-"
+                "What kind of question do you want? Choose a category: `deep`, `fun`, or `flirty`."
                 "For example: `/question fun`"
             )
             return

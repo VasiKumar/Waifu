@@ -49,7 +49,7 @@ class WaifuBot:
         # Initialize Gemini
         if self.gemini_api_key:
             genai.configure(api_key=self.gemini_api_key)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            self.model = genai.GenerativeModel("gemini-2.5-flash")
             logger.info("Gemini model initialized successfully ✨")
         else:
             logger.error("GEMINI_API_KEY not found. Please set it as an environment variable.")

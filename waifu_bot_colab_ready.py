@@ -126,12 +126,12 @@ Soph (if user has been a stranger): Hold on there, speed-racer. I barely know yo
     # --- Commands ---
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_message = (
-            f"Hey there. I'm Soph.
+            "Hey there. I'm Soph. \n\n"
 
 "
-            f"In groups, mention me with @{self.bot_username} to get my attention.
+            f"In groups, mention me with @{self.bot_username} to get my attention. \n\n"
 "
-            "In private, just message me.
+            "In private, just message me. \n\n"
 
 "
             "Let's talk. What's on your mind?"

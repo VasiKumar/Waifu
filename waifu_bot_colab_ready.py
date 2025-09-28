@@ -362,8 +362,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(run_bot())
     except KeyboardInterrupt:
-        print("
-Shutting down gracefully. Talk to you later. 😉")
+        print("Shutting down gracefully. Talk to you later. 😉")
     except Exception as e:
         logger.error(f"Fatal error during runtime: {e}")
         print(f"💔 Something went very wrong: {e}")
